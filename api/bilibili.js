@@ -5,69 +5,58 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Missing URL" });
   }
 
-  const crawlbaseToken = "s15AoDB0-2Mmb50HO1IlWQ";
-
   let bvid = null;
 
-  // ---------------------------------------------------------
-  // 1️⃣ If URL already has BV ID (bilibili.com)
-  // ---------------------------------------------------------
+  // 1️⃣ BV ID from bilibili.com
   const bvMatch = url.match(/BV[0-9A-Za-z]+/);
   if (bvMatch) {
     bvid = bvMatch[0];
   }
 
-  // ---------------------------------------------------------
-  // 2️⃣ Handle bilibili.tv URLs → extract HTML → find BV
-  // ---------------------------------------------------------
-  if (!bvid && url.includes("bilibili.tv")) {
+  // 2️⃣ bilibili.tv numeric video ID
+  const tvMatch = url.match(/video\/(\d{10,20})/);
+
+  if (!bvid && tvMatch) {
+    const tvId = tvMatch[1];
+
+    // 🔥 FETCH PAGE USING CRAWLBASE (NORMAL TOKEN)
+    const crawlURL = `https://api.crawlbase.com/?token=s15AoDB0-2Mmb50HO1IlWQ&url=${encodeURIComponent(url)}`;
+
     try {
-      const crawlUrl = `https://api.crawlbase.com/?token=${crawlbaseToken}&url=${encodeURIComponent(url)}`;
+      const crawlRes = await fetch(crawlURL);
+      const html = await crawlRes.text();
 
-      const response = await fetch(crawlUrl);
-      const html = await response.text();
+      // 🔥 EXTRACT BV ID FROM HTML
+      const bvFromHtml = html.match(/"bvid":"(BV[0-9A-Za-z]+)"/);
 
-      // Search BV in crawled HTML
-      const findBV = html.match(/BV[0-9A-Za-z]{10}/);
-      if (findBV) {
-        bvid = findBV[0];
+      if (bvFromHtml) {
+        bvid = bvFromHtml[1];
       } else {
-        return res.status(500).json({
-          error: "Failed to extract BV ID from bilibili.tv page"
-        });
+        return res.status(400).json({ error: "Failed to extract BV ID from bilibili.tv page" });
       }
-    } catch (err) {
-      return res.status(500).json({
-        error: "Crawlbase request failed",
-        details: err.toString()
-      });
+
+    } catch (error) {
+      return res.status(500).json({ error: "Proxy conversion failed", details: error.message });
     }
   }
 
-  // ---------------------------------------------------------
-  // 3️⃣ If STILL no BV → invalid URL
-  // ---------------------------------------------------------
+  // Still no BV?
   if (!bvid) {
     return res.status(400).json({ error: "Invalid Bilibili URL" });
   }
 
-  // ---------------------------------------------------------
-  // 4️⃣ Fetch real Bilibili video info
-  // ---------------------------------------------------------
+  // 3️⃣ Get regular bilibili info
   try {
-    const infoUrl = `https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`;
-    const infoRes = await fetch(infoUrl);
+    const videoInfoUrl = `https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`;
+    const infoRes = await fetch(videoInfoUrl);
     const info = await infoRes.json();
 
     if (!info || info.code !== 0) {
-      return res.status(500).json({ error: "Failed to fetch Bilibili meta" });
+      return res.status(500).json({ error: "Failed to fetch video info" });
     }
 
     const { title, desc, pic, owner, cid } = info.data;
 
-    // ---------------------------------------------------------
-    // 5️⃣ Build download links
-    // ---------------------------------------------------------
     const play_urls = [
       { quality: "HD", url: `https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=80` },
       { quality: "SD", url: `https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=64` },
@@ -84,9 +73,6 @@ export default async function handler(req, res) {
     });
 
   } catch (err) {
-    return res.status(500).json({
-      error: "Failed to fetch final video info",
-      details: err.toString()
-    });
+    return res.status(500).json({ error: "Failed to fetch video info" });
   }
 }
