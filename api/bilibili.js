@@ -7,67 +7,64 @@ export default async function handler(req, res) {
 
   let bvid = null;
 
-  // 1) Extract BV from bilibili.com
+  // 1️⃣ Extract BV from bilibili.com links
   const bvMatch = url.match(/BV[0-9A-Za-z]+/);
-  if (bvMatch) bvid = bvMatch[0];
+  if (bvMatch) {
+    bvid = bvMatch[0];
+  }
 
-  // 2) Extract video_id from bilibili.tv
+  // 2️⃣ Convert bilibili.tv → BV using new working API
   const tvMatch = url.match(/video\/(\d{10,20})/);
   if (!bvid && tvMatch) {
     const tvId = tvMatch[1];
+
     try {
-      const api = `https://www.bilibili.tv/intl/gateway/v2/video/intro?video_id=${tvId}`;
-      const r = await fetch(api);
-      const j = await r.json();
-      if (j?.data?.bvid) bvid = j.data.bvid;
-    } catch {
-      return res.status(500).json({ error: "bilibili.tv conversion failed" });
+      const api = `https://api.bilibili.com/pgc/view/web/season?ep_id=${tvId}`;
+      const response = await fetch(api);
+      const data = await response.json();
+
+      if (data?.result?.episodes?.[0]?.bvid) {
+        bvid = data.result.episodes[0].bvid;
+      }
+    } catch (err) {
+      return res.status(500).json({ error: "Failed to convert bilibili.tv ID" });
     }
   }
 
+  // Still no BV? invalid URL
   if (!bvid) {
     return res.status(400).json({ error: "Invalid Bilibili URL" });
   }
 
-  // 3) Fetch Video Info from bilibili.tv API (WORKS on Vercel)
+  // 3️⃣ Fetch video details
   try {
-    const infoURL = `https://www.bilibili.tv/intl/gateway/v2/video/intro?bvid=${bvid}`;
-    const resInfo = await fetch(infoURL);
-    const info = await resInfo.json();
+    const infoUrl = `https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`;
+    const infoRes = await fetch(infoUrl);
+    const info = await infoRes.json();
 
-    if (!info?.data) {
+    if (!info || info.code !== 0) {
       return res.status(500).json({ error: "Failed to fetch video info" });
     }
 
-    const data = info.data;
-    const { title, desc, cover, cid } = data;
+    const { title, desc, pic, owner, cid } = info.data;
 
-    // 4) Build download URLs using bilibili.tv API
+    // 4️⃣ Generate download URLs
     const play_urls = [
-      {
-        quality: "Full HD",
-        url: `https://www.bilibili.tv/intl/gateway/v2/video/playurl?bvid=${bvid}&cid=${cid}&qn=120`
-      },
-      {
-        quality: "HD",
-        url: `https://www.bilibili.tv/intl/gateway/v2/video/playurl?bvid=${bvid}&cid=${cid}&qn=80`
-      },
-      {
-        quality: "SD",
-        url: `https://www.bilibili.tv/intl/gateway/v2/video/playurl?bvid=${bvid}&cid=${cid}&qn=64`
-      }
+      { quality: "HD", url: `https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=80` },
+      { quality: "SD", url: `https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=64` },
+      { quality: "LOW", url: `https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=32` }
     ];
 
     return res.json({
       title,
-      thumbnail: cover,
+      thumbnail: pic,
       description: desc,
+      owner: owner?.name,
       bvid,
-      cid,
       play_urls
     });
 
-  } catch (e) {
-    return res.status(500).json({ error: "Video info fetch failed" });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to fetch video info" });
   }
 }
