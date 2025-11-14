@@ -1,79 +1,79 @@
 export default async function handler(req, res) {
-  try {
-    const url = req.query.url;
+  const { url } = req.query;
 
-    if (!url) {
-      return res.status(400).json({ error: "No URL provided" });
-    }
+  if (!url) {
+    return res.status(400).json({ error: "Missing URL" });
+  }
 
-    let bvid = null;
+  let bvid = null;
 
-    // 1️⃣ Extract BV from bilibili.com
-    if (url.includes("bilibili.com")) {
-      const match = url.match(/BV[0-9A-Za-z]+/);
-      if (match) bvid = match[0];
-    }
+  // -------------------------------
+  // 1️⃣ HANDLE bilibili.com BV LINKS
+  // -------------------------------
+  const bvMatch = url.match(/BV[0-9A-Za-z]+/);
+  if (bvMatch) {
+    bvid = bvMatch[0];
+  }
 
-    // 2️⃣ Convert bilibili.tv → BV
-    if (url.includes("bilibili.tv")) {
-      const tvIdMatch = url.match(/video\/(\d+)/);
-      if (tvIdMatch) {
-        const tvId = tvIdMatch[1];
+  // --------------------------------
+  // 2️⃣ HANDLE bilibili.tv LINKS
+  // --------------------------------
+  const tvMatch = url.match(/video\/(\d{10,20})/);
+  if (!bvid && tvMatch) {
+    const tvId = tvMatch[1];
 
-        // Convert numeric ID → BV by calling Bilibili API
-        const convertRes = await fetch(
-          `https://api.bilibili.com/x/web-interface/view?aid=${tvId}`
-        ).then(r => r.json());
+    // Convert bilibili.tv ID → BV via intl API
+    try {
+      const api = `https://www.bilibili.tv/intl/gateway/v2/video/intro?video_id=${tvId}`;
+      const response = await fetch(api);
+      const data = await response.json();
 
-        if (convertRes.data && convertRes.data.bvid) {
-          bvid = convertRes.data.bvid;
-        } else {
-          return res.status(400).json({ error: "Failed to convert bilibili.tv ID" });
-        }
+      if (data?.data?.bvid) {
+        bvid = data.data.bvid;
       }
+    } catch (e) {
+      return res.status(500).json({ error: "Failed to convert bilibili.tv ID" });
+    }
+  }
+
+  // If STILL no BV, it's invalid
+  if (!bvid) {
+    return res.status(400).json({ error: "Invalid Bilibili URL" });
+  }
+
+  // --------------------------------
+  // 3️⃣ GET VIDEO META INFO
+  // --------------------------------
+  try {
+    const videoInfoUrl = `https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`;
+    const infoRes = await fetch(videoInfoUrl);
+    const info = await infoRes.json();
+
+    if (!info || info.code !== 0) {
+      return res.status(500).json({ error: "Failed to fetch video info" });
     }
 
-    if (!bvid) {
-      return res.status(400).json({ error: "Invalid Bilibili URL" });
-    }
+    const { title, desc, pic, owner, cid } = info.data;
 
-    // 3️⃣ Fetch full BV video info
-    const info = await fetch(
-      `https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`
-    ).then(r => r.json());
-
-    if (!info.data) {
-      return res.status(400).json({ error: "Video not found" });
-    }
-
-    const title = info.data.title;
-    const thumbnail = info.data.pic;
-    const owner = info.data.owner?.name;
-    const cid = info.data.cid;
-
-    // 4️⃣ Generate play URLs for multiple qualities
-    const qualities = [
-      { qn: 80, quality: "HD" },
-      { qn: 64, quality: "SD" },
-      { qn: 32, quality: "LOW" }
+    // --------------------------------
+    // 4️⃣ BUILD DOWNLOAD LINKS
+    // --------------------------------
+    const play_urls = [
+      { quality: "HD", url: `https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=80` },
+      { quality: "SD", url: `https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=64` },
+      { quality: "LOW", url: `https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=32` }
     ];
 
-    const play_urls = qualities.map(q => ({
-      quality: q.quality,
-      url: `https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=${q.qn}`
-    }));
-
-    // 5️⃣ Return response
-    return res.status(200).json({
+    return res.json({
       title,
-      thumbnail,
-      owner,
+      thumbnail: pic,
+      description: desc,
+      owner: owner?.name,
       bvid,
       play_urls
     });
 
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: "Server Error" });
+    return res.status(500).json({ error: "Failed to fetch video info" });
   }
 }
