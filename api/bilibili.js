@@ -1,87 +1,79 @@
-export const config = {
-  runtime: "edge",
-};
-
-export default async function handler(req) {
+export default async function handler(req, res) {
   try {
-    const { searchParams } = new URL(req.url);
-    const url = searchParams.get("url");
+    const url = req.query.url;
 
     if (!url) {
-      return new Response(JSON.stringify({ error: "No Bilibili URL provided" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" }
-      });
+      return res.status(400).json({ error: "No URL provided" });
     }
 
-    // Validate URL
-    if (!url.includes("bilibili.com") && !url.includes("bilibili.tv")) {
-      return new Response(JSON.stringify({ error: "Invalid Bilibili URL" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" }
-      });
+    let bvid = null;
+
+    // 1️⃣ Extract BV from bilibili.com
+    if (url.includes("bilibili.com")) {
+      const match = url.match(/BV[0-9A-Za-z]+/);
+      if (match) bvid = match[0];
     }
 
-    // Extract BV ID
-    const bvMatch = url.match(/BV([A-Za-z0-9]+)/);
-    if (!bvMatch) {
-      return new Response(JSON.stringify({ error: "Could not extract BV ID" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" }
-      });
-    }
+    // 2️⃣ Convert bilibili.tv → BV
+    if (url.includes("bilibili.tv")) {
+      const tvIdMatch = url.match(/video\/(\d+)/);
+      if (tvIdMatch) {
+        const tvId = tvIdMatch[1];
 
-    const bvId = bvMatch[0];
+        // Convert numeric ID → BV by calling Bilibili API
+        const convertRes = await fetch(
+          `https://api.bilibili.com/x/web-interface/view?aid=${tvId}`
+        ).then(r => r.json());
 
-    // Fetch video info from Bilibili API (public)
-    const apiURL = `https://api.bilibili.com/x/web-interface/view?bvid=${bvId}`;
-    const response = await fetch(apiURL);
-    const json = await response.json();
-
-    if (json.code !== 0) {
-      return new Response(JSON.stringify({ error: "Failed to fetch video info" }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" }
-      });
-    }
-
-    const data = json.data;
-
-    // Format response
-    return new Response(
-      JSON.stringify({
-        title: data.title,
-        thumbnail: data.pic,
-        description: data.desc,
-        owner: data.owner.name,
-        bvid: data.bvid,
-
-        // Instead of real download links (blocked by Bilibili),
-        // we generate playable URLs using public API
-        play_urls: [
-          {
-            quality: "HD",
-            url: `https://api.bilibili.com/x/player/playurl?bvid=${data.bvid}&cid=${data.cid}&qn=80`
-          },
-          {
-            quality: "SD",
-            url: `https://api.bilibili.com/x/player/playurl?bvid=${data.bvid}&cid=${data.cid}&qn=64`
-          },
-          {
-            quality: "LOW",
-            url: `https://api.bilibili.com/x/player/playurl?bvid=${data.bvid}&cid=${data.cid}&qn=32`
-          }
-        ]
-      }),
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
+        if (convertRes.data && convertRes.data.bvid) {
+          bvid = convertRes.data.bvid;
+        } else {
+          return res.status(400).json({ error: "Failed to convert bilibili.tv ID" });
+        }
       }
-    );
-  } catch (err) {
-    return new Response(JSON.stringify({ error: "Server Error", details: err.message }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" }
+    }
+
+    if (!bvid) {
+      return res.status(400).json({ error: "Invalid Bilibili URL" });
+    }
+
+    // 3️⃣ Fetch full BV video info
+    const info = await fetch(
+      `https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`
+    ).then(r => r.json());
+
+    if (!info.data) {
+      return res.status(400).json({ error: "Video not found" });
+    }
+
+    const title = info.data.title;
+    const thumbnail = info.data.pic;
+    const owner = info.data.owner?.name;
+    const cid = info.data.cid;
+
+    // 4️⃣ Generate play URLs for multiple qualities
+    const qualities = [
+      { qn: 80, quality: "HD" },
+      { qn: 64, quality: "SD" },
+      { qn: 32, quality: "LOW" }
+    ];
+
+    const play_urls = qualities.map(q => ({
+      quality: q.quality,
+      url: `https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=${q.qn}`
+    }));
+
+    // 5️⃣ Return response
+    return res.status(200).json({
+      title,
+      thumbnail,
+      owner,
+      bvid,
+      play_urls
     });
+
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Server Error" });
   }
 }
