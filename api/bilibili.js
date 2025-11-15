@@ -7,50 +7,33 @@ export default async function handler(req, res) {
 
   let bvid = null;
 
-  // 1️⃣ Extract BV directly if present
+  // Extract BV if present
   const bvMatch = url.match(/BV[0-9A-Za-z]+/);
   if (bvMatch) {
     bvid = bvMatch[0];
   }
 
-  // 2️⃣ bilibili.tv numeric video ID
-  const tvMatch = url.match(/video\/(\d{10,20})/);
+  // If bilibili.tv -> extract numeric ID
+  const tvMatch = url.match(/video\/(\d{6,20})/);
 
   if (!bvid && tvMatch) {
-    const crawlURL =
-      `https://api.crawlbase.com/?token=EHLuestAzfw7pBwy2s4PKA&url=${encodeURIComponent(url)}&javascript=true`;
+    const videoId = tvMatch[1];
+
+    // Free Bilibili API
+    const api = `https://www.bilibili.tv/intl/gateway/web/v2/app/video/info?video_id=${videoId}`;
 
     try {
-      const crawlRes = await fetch(crawlURL);
-      const html = await crawlRes.text();
+      const r = await fetch(api);
+      const j = await r.json();
 
-      // Try multiple BV patterns because bilibili.tv is inconsistent
-      const patterns = [
-        /"bvid":"(BV[0-9A-Za-z]+)"/,
-        /"bvid":"(BV[A-Za-z0-9]+)"/,
-        /"bvid":\s*"?(BV[A-Za-z0-9]+)"?/,
-        /BV[A-Za-z0-9]{10}/
-      ];
-
-      for (let p of patterns) {
-        let m = html.match(p);
-        if (m) {
-          bvid = m[1] || m[0];
-          break;
-        }
-      }
-
-      if (!bvid) {
-        return res.status(400).json({
-          error: "Cannot extract BV ID from bilibili.tv (JS version)",
-        });
+      if (j?.data?.bvid) {
+        bvid = j.data.bvid;
+      } else {
+        return res.status(400).json({ error: "Could not extract BV from bilibili.tv" });
       }
 
     } catch (err) {
-      return res.status(500).json({
-        error: "Crawlbase JS fetch failed",
-        details: err.message,
-      });
+      return res.status(500).json({ error: "Failed to convert bilibili.tv ID" });
     }
   }
 
@@ -58,11 +41,11 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Invalid Bilibili URL" });
   }
 
-  // 3️⃣ Fetch normal Bilibili info
+  // Fetch Bili info
   try {
     const infoUrl = `https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`;
-    const infoRes = await fetch(infoUrl);
-    const info = await infoRes.json();
+    const r = await fetch(infoUrl);
+    const info = await r.json();
 
     if (!info || info.code !== 0) {
       return res.status(500).json({ error: "Failed to fetch video info" });
