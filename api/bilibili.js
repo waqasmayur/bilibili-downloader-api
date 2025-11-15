@@ -7,33 +7,42 @@ export default async function handler(req, res) {
 
   let bvid = null;
 
-  // Extract BV if present
+  // Extract BV directly if in URL
   const bvMatch = url.match(/BV[0-9A-Za-z]+/);
-  if (bvMatch) {
-    bvid = bvMatch[0];
-  }
+  if (bvMatch) bvid = bvMatch[0];
 
-  // If bilibili.tv -> extract numeric ID
-  const tvMatch = url.match(/video\/(\d{6,20})/);
+  // Extract numeric bilibili.tv ID
+  const idMatch = url.match(/video\/(\d{6,20})/);
 
-  if (!bvid && tvMatch) {
-    const videoId = tvMatch[1];
-
-    // Free Bilibili API
-    const api = `https://www.bilibili.tv/intl/gateway/web/v2/app/video/info?video_id=${videoId}`;
+  if (!bvid && idMatch) {
+    const videoId = idMatch[1];
+    const apiURL = `https://www.bilibili.tv/intl/gateway/web/v2/app/video/info?video_id=${videoId}`;
 
     try {
-      const r = await fetch(api);
-      const j = await r.json();
+      const response = await fetch(apiURL, {
+        method: "GET",
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          "Referer": "https://www.bilibili.tv/"
+        }
+      });
 
-      if (j?.data?.bvid) {
-        bvid = j.data.bvid;
+      const data = await response.json();
+
+      if (data?.data?.bvid) {
+        bvid = data.data.bvid;
       } else {
-        return res.status(400).json({ error: "Could not extract BV from bilibili.tv" });
+        return res.status(400).json({
+          error: "bilibili.tv API returned no BV ID",
+          raw: data
+        });
       }
 
     } catch (err) {
-      return res.status(500).json({ error: "Failed to convert bilibili.tv ID" });
+      return res.status(500).json({
+        error: "Failed to convert bilibili.tv ID",
+        message: err.message
+      });
     }
   }
 
@@ -41,10 +50,10 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Invalid Bilibili URL" });
   }
 
-  // Fetch Bili info
+  // Fetch main Bilibili video info
   try {
-    const infoUrl = `https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`;
-    const r = await fetch(infoUrl);
+    const infoURL = `https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`;
+    const r = await fetch(infoURL);
     const info = await r.json();
 
     if (!info || info.code !== 0) {
@@ -67,6 +76,9 @@ export default async function handler(req, res) {
     });
 
   } catch (err) {
-    return res.status(500).json({ error: "Failed to fetch Bili info" });
+    return res.status(500).json({
+      error: "Failed to fetch Bilibili info",
+      message: err.message
+    });
   }
 }
